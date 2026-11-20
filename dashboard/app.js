@@ -150,8 +150,60 @@
       kpi('Launch candidates', String(launch.length), DATA.counts.watchlist + ' watchlist + ' + (launch.length - DATA.counts.watchlist) + ' below the $50M floor'),
       kpi('Top launch implied', topLaunch ? fmtUsd(topLaunch[R.value]) : 'n/a', topLaunch ? topLaunch[R.name] + ' · #1 launch · rank #' + topLaunch[R.rank] + ' overall' : ''),
       kpi('All launch implied', fmtUsd(totalLaunch), 'sum of the ' + launch.length + ' candidates\u2019 fitted values'),
-      kpi('Blind-test error', v.chosenLoocvPct + '%', 'leave-one-out median · ' + v.candidates.length + ' candidates tested', true),
+      kpi('Out-of-sample factor', '×' + v.walkForwards[0].factorMiss.toFixed(2) + ' / ×' + v.walkForwards[1].factorMiss.toFixed(2), 'walk-forward factor miss, first two cutoffs · LOOCV ×' + v.loocvFactorMiss.toFixed(2) + ' · blind error ' + v.chosenLoocvPct + '%', true),
       kpi('Farm verdicts', verdicts.FARM + ' FARM', verdicts.THIN + ' thin · ' + verdicts.SKIP + ' skip · launch rows only')
+    );
+  }
+
+  function svgEl(tag, attrs) {
+    var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        if (k === 'text') node.textContent = attrs[k];
+        else node.setAttribute(k, attrs[k]);
+      });
+    }
+    for (var i = 2; i < arguments.length; i++) {
+      var child = arguments[i];
+      if (child === null || child === undefined) continue;
+      if (Array.isArray(child)) child.forEach(function (c) { if (c) node.appendChild(c); });
+      else node.appendChild(child);
+    }
+    return node;
+  }
+
+  // The comps scatter: log TVL against log market cap, with the fitted curve. The points
+  // are the 128 comps that fit the model; the line is the curve without category offsets.
+  function scatterChart() {
+    var m = DATA.model;
+    var pts = (DATA.comps || []).filter(function (c) { return c.tvl_usd > 0 && c.mcap_usd > 0; });
+    if (pts.length < 10) return null;
+    var xs = pts.map(function (c) { return Math.log10(c.tvl_usd); });
+    var ys = pts.map(function (c) { return Math.log10(c.mcap_usd); });
+    var x0 = Math.floor(Math.min.apply(null, xs)), x1 = Math.ceil(Math.max.apply(null, xs));
+    var y0 = Math.floor(Math.min.apply(null, ys)), y1 = Math.ceil(Math.max.apply(null, ys));
+    var W = 660, H = 360, L = 58, R = 14, T = 12, B = 36;
+    function X(v) { return L + ((v - x0) / (x1 - x0)) * (W - L - R); }
+    function Y(v) { return T + (1 - (v - y0) / (y1 - y0)) * (H - T - B); }
+    var kids = [], gx, gy;
+    for (gx = x0; gx <= x1; gx++) {
+      kids.push(svgEl('line', { x1: X(gx), y1: T, x2: X(gx), y2: H - B, class: 'grid' }));
+      // The last tick sits at the plot's right edge, so its label anchors to the end
+      // instead of centring off the canvas.
+      kids.push(svgEl('text', { x: gx === x1 ? W - 4 : X(gx), y: H - 14, class: 'axis', 'text-anchor': gx === x1 ? 'end' : 'middle', text: fmtUsd(Math.pow(10, gx)) }));
+    }
+    for (gy = y0; gy <= y1; gy++) {
+      kids.push(svgEl('line', { x1: L, y1: Y(gy), x2: W - R, y2: Y(gy), class: 'grid' }));
+      kids.push(svgEl('text', { x: L - 8, y: Y(gy) + 4, class: 'axis', 'text-anchor': 'end', text: fmtUsd(Math.pow(10, gy)) }));
+    }
+    pts.forEach(function (c) {
+      kids.push(svgEl('circle', { cx: X(Math.log10(c.tvl_usd)).toFixed(1), cy: Y(Math.log10(c.mcap_usd)).toFixed(1), r: 2.6, class: 'dot' }));
+    });
+    kids.push(svgEl('line', { x1: X(x0), y1: Y(m.intercept + m.slope * x0), x2: X(x1), y2: Y(m.intercept + m.slope * x1), class: 'fit' }));
+    kids.push(svgEl('text', { x: L, y: H - 2, class: 'axis', text: 'TVL (log scale) →' }));
+    return el('figure', { class: 'scatter-wrap' },
+      svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'scatter', role: 'img', 'aria-label': 'Scatter of the ' + pts.length + ' comps: log TVL against log market cap, with the fitted curve' }, kids),
+      el('figcaption', { class: 'sub', text: 'The ' + pts.length + ' comps: log TVL against log market cap, with the fitted curve. The scatter is the story — multiples span 0.00025× to 400×, so no 10-field model prices these precisely. The range, not the point, is the honest claim.' })
     );
   }
 
@@ -171,13 +223,16 @@
       el('p', { class: 'sub', text: 'One fitted curve scores every protocol. No name is special-cased, and no row is hand-picked. The same snapshot that feeds the board also grades the model, blind.' }),
       el('div', { class: 'formula', text: 'implied = 10 ^ (' + m.intercept + ' + ' + m.slope + ' x log10(TVL) + category offset)' }),
       el('p', { text: 'Fitted by least squares on ' + v.comps + ' tokenized protocols that record a market cap. The category offset is the mean log-residual of that category\u2019s comps, shrunk n / (n + ' + m.shrink + '). Largest offsets: ' + offsets.map(function (o) { return o[0] + ' ' + (o[1] >= 0 ? '+' : '') + o[1].toFixed(2) + ' dex'; }).join(', ') + '.' }),
+      scatterChart(),
+      el('h3', { text: 'The holdout story, in factors — not just per cents' }),
+      el('p', { text: 'Walk-forward checks, fitted before each cutoff and tested on the protocols listed after: ' + v.walkForwards.map(function (w) { return 'before ' + w.cutoff + ' (' + w.train + ' comps), ' + w.test + ' after, median factor miss \u00d7' + w.factorMiss.toFixed(2) + ' (median error ' + w.medianErrPct + '%)'; }).join('; ') + '. Leave-one-out, the median factor miss is \u00d7' + v.loocvFactorMiss.toFixed(2) + ' on a median error of ' + v.chosenLoocvPct + '%. The flat median multiple — value a protocol at the median mcap/TVL of its peers — scores ' + v.flatMultipleLoocvPct + '% on the same blind test, worse than the fitted ' + v.chosenLoocvPct + '%.' }),
+      el('p', { text: 'Every rank carries a P25\u2013P75 predictive range from ' + v.bootstrapRefits + ' bootstrap refits, each prediction plus one resampled in-sample residual: on the leave-one-out protocol, ' + v.predictiveHold2575Pct + '% of held-out actuals fall inside the printed range (median width \u00d7' + v.predictiveWidth2575Factor + '). The honest 90% predictive interval covers ' + v.predictiveHold90Pct + '% but is \u00d7' + v.predictiveWidth90Factor + ' wide, so it is not printed per row. The old parameter-only interval covered only 32% at its nominal 90% level, which is why v3 replaced it. The fit explains R\u00b2 ' + v.r2 + ' of log value with its category offsets (TVL alone explains 0.19); a peer\u2019s actual value typically lands within \u00d7' + v.residFactor + ' of the fit (residual SD ' + v.residSdDex + ' dex).' }),
       el('h3', { text: 'The blind test: ' + v.candidates.length + ' models, one winner' }),
       el('table', { class: 'mini' },
         el('thead', null, el('tr', null, el('th', { text: 'Candidate model' }), el('th', { text: 'Leave-one-out median error' }), el('th', { text: 'Verdict' }))),
         el('tbody', null, candRows)
       ),
-      el('p', { text: 'Walk-forward checks, fitted before each cutoff and tested on the protocols listed after: ' + v.walkForwards.map(function (w) { return 'before ' + w.cutoff + ' (' + w.train + ' comps), ' + w.test + ' after, median error ' + w.medianErrPct + '%'; }).join('; ') + '. The fit explains R\u00b2 ' + v.r2 + ' of log value with its category offsets (' + v.r2 + ' counts the offsets; TVL alone explains 0.19); a peer\u2019s actual value typically lands within \u00d7' + v.residFactor + ' of the fit (residual SD ' + v.residSdDex + ' dex). That is why every rank carries its 90% interval and its rank range from ' + v.bootstrapRefits + ' bootstrap refits, not just a point.' }),
-      el('div', { class: 'note' }, el('b', { text: 'Read this before trusting a rank: ' }), el('span', { text: 'TVL explains only about a fifth of a token\u2019s value on its own. For v2 the model was retested against ' + v.candidates.length + ' candidates — growth, age, chains count, a quadratic TVL term, clipped growth, median offsets and four shrink values — and none beat the kept fit\u2019s ' + v.chosenLoocvPct + '%, so the fit stands and v2\u2019s gains come from coverage, the KPI strip and deposit-sized plans instead. A rank without its interval is a guess dressed as a price.' })),
+      el('div', { class: 'note' }, el('b', { text: 'Read this before trusting a rank: ' }), el('span', { text: 'TVL explains only about a fifth of a token\u2019s value on its own. The model was retested against ' + v.candidates.length + ' candidates in the build and about 86 more in a research round (104 total) — growth, age, chains, interactions, kernels — and none honestly beat the kept fit\u2019s ' + v.chosenLoocvPct + '%, so the fit stands and v3\u2019s gains come from the interval fix and the validation story instead. A rank without its range is a guess dressed as a price.' })),
       el('h3', { text: 'Farm costs, stated as estimates' }),
       el('p', { text: 'Gas per transaction, November 2026 estimates: Ethereum $2.50, Arbitrum $0.15, Optimism $0.10, Base $0.05, Solana $0.01, BSC $0.25, Polygon $0.05, Avalanche $0.30, Tron $0.50, Bitcoin $1.00, other chains $0.50. One farm runs 7 transactions (approve, deposit, four weekly actions, claim). Every plan is costed at three deposit sizes — $100, $500 and $1,000 — each netted to the dollar (deposit plus gas); the recommended tier is $1,000 on $1B+ of TVL, $500 on $100M+, $100 below. Hold: 60 days if listed under 180 days, 45 under a year, 30 otherwise. The deposit is locked capital, not spent money, so the verdict turns on the sunk gas cost: FARM when gas is at most 10% of the recommended deposit on at least $100M of TVL, implied value at least $10M, and 7-day growth no worse than -10%; SKIP when the implied value is under $3M, TVL under $10M, or 7-day growth under -30%; THIN in between.' })
     );
@@ -279,7 +334,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', { class: 'board' },
-          el('caption', { class: 'sub', text: 'All 758 protocols, strongest value first. Launch candidates carry a fitted implied value; trading tokens carry their recorded market cap; the other two slices carry a fitted value flagged as not a launch price. Select a row for its peers and farm plan. Interval and rank range come from 200 bootstrap refits of the comps fit.' }),
+          el('caption', { class: 'sub', text: 'All 758 protocols, strongest value first. Launch candidates carry a fitted implied value; trading tokens carry their recorded market cap; the other two slices carry a fitted value flagged as not a launch price. Select a row for its peers and farm plan. The range is the P25–P75 predictive range from 200 bootstrap refits plus one resampled residual each; the rank range is the P5–P95 of the refits.' }),
           el('thead', null, el('tr', null,
             sortHeader('rank', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -288,7 +343,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('value', 'Implied value'),
-            el('th', { scope: 'col', text: '90% interval' }),
+            el('th', { scope: 'col', text: 'P25–P75 range' }),
             el('th', { scope: 'col', text: 'Rank range' }),
             sortHeader('verdict', 'Verdict'),
             sortHeader('cost', 'Farm cost')
@@ -384,7 +439,7 @@
         el('div', null, el('span', { text: 'Market cap (recorded)' }), el('b', { text: fmtUsd(row[R.mcap]) })),
         el('div', null, el('span', { text: 'mcap / TVL' }), el('b', { text: fmtMult(row[R.mcap] && row[R.tvl] ? row[R.mcap] / row[R.tvl] : null) })),
         el('div', null, el('span', { text: 'Value on the board' }), el('b', { text: fmtUsd(row[R.value]) })),
-        el('div', null, el('span', { text: '90% interval' }), el('b', { text: 'exact — the market\u2019s own value' })),
+        el('div', null, el('span', { text: 'P25–P75 range' }), el('b', { text: 'exact — the market\u2019s own value' })),
         el('div', null, el('span', { text: 'Rank range (200 refits)' }), el('b', { text: row[R.rlo] + ' – ' + row[R.rhi] }))
       )
       : el('div', { class: 'equation' },
@@ -392,7 +447,7 @@
         el('div', null, el('span', { text: 'Curve value (TVL only)' }), el('b', { text: fmtUsd(curve) })),
         el('div', null, el('span', { text: 'Category factor (' + (row[R.cat] || 'Other') + ')' }), el('b', { text: 'x' + factor.toFixed(2) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row[R.value]) })),
-        el('div', null, el('span', { text: '90% interval (200 refits)' }), el('b', { text: fmtUsd(row[R.lo]) + ' – ' + fmtUsd(row[R.hi]) })),
+        el('div', null, el('span', { text: 'P25–P75 predictive range' }), el('b', { text: fmtUsd(row[R.lo]) + ' – ' + fmtUsd(row[R.hi]) })),
         el('div', null, el('span', { text: 'Rank range (200 refits)' }), el('b', { text: row[R.rlo] + ' – ' + row[R.rhi] }))
       );
     var farmBox = isLaunch
@@ -429,7 +484,7 @@
         el('div', null,
           el('h3', { text: 'Where the value comes from' }),
           valueBox,
-          el('p', { class: 'sub', text: row[R.status] === 'TRADING' ? 'The value is the market\u2019s own, not a model\u2019s. Its rank range still moves with the fitted rows around it.' : 'The curve is the comps fit; the factor is this category\u2019s shrunk offset. The interval is the fit\u2019s uncertainty, not a promise.' })
+          el('p', { class: 'sub', text: row[R.status] === 'TRADING' ? 'The value is the market\u2019s own, not a model\u2019s. Its rank range still moves with the fitted rows around it.' : 'The curve is the comps fit; the factor is this category\u2019s shrunk offset. The range is the fit\u2019s honest uncertainty — ' + DATA.validation.predictiveHold2575Pct + '% of held-out actuals land inside it — not a promise.' })
         ),
         el('div', null,
           el('h3', { text: 'Its five nearest peers — show your work' }),

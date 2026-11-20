@@ -60,18 +60,26 @@ median offsets and four shrink values — and nothing beat the v1 fit:
 - No category + growth + chains: 85.5% — rejected
 
 Walk-forward, fitted before each cutoff and tested on the protocols listed after:
-2024-06-01, 52 comps fitted, 43 tested, median error 91.1%; 2025-01-01, 64 fitted,
-31 tested, 90.3%; 2025-06-01, 75 fitted, 20 tested, 92.7%. The fit explains R2 0.26
-of log value with its category offsets (TVL alone explains 0.19); a peer's actual value
-typically lands within x7.4 of the fit (residual SD 0.87 dex). Growth and age were tested
-and made the blind error worse, so they do not enter the price; they still show on every
-row and feed the farm verdict.
+2024-06-01, 52 comps fitted, 43 tested, median error 91.1%, median factor miss x2.97;
+2025-01-01, 64 fitted, 31 tested, 90.3%, x3.37; 2025-06-01, 75 fitted, 20 tested,
+92.7%, x5.40. Leave-one-out, the median factor miss is x3.63 on a median error of
+84.8%. The flat median multiple scores 88.0% on the same blind test, worse than the
+fitted 84.8%. The fit explains R2 0.26 of log value with its category offsets (TVL
+alone explains 0.19); a peer's actual value typically lands within x7.4 of the fit
+(residual SD 0.87 dex). Growth and age were tested and made the blind error worse, so
+they do not enter the price; they still show on every row and feed the farm verdict.
 
-That is why every rank carries a 90% interval and a rank range from 200 bootstrap refits
-of the comps fit, not just a point. A rank without its interval is a guess dressed as a
-price. TVL alone explains only a fifth of a token's value — the board says so on its face.
-Trading rows keep their recorded market cap in every refit, so their interval is exact and
-only their rank range moves.
+For v3 the model was retested in a research round (~86 more candidates, 104 total,
+including kernel ensembles) — none honestly beat the kept fit, so the fit stands and
+v3 fixes the interval instead. That is why every rank carries a P25-P75 predictive
+range from 200 bootstrap refits plus one resampled in-sample residual each, not just
+a point: on the leave-one-out protocol, 48.4% of held-out actuals fall inside the
+printed range (median width x11.1). The honest 90% predictive interval covers 86.7%
+but is x845.5 wide, so it is not printed per row. The old parameter-only interval
+covered only 32% at its nominal 90% level. A rank without its range is a guess
+dressed as a price. TVL alone explains only a fifth of a token's value — the board
+says so on its face. Trading rows keep their recorded market cap in every refit, so
+their range is exact and only their rank range moves.
 
 ## Show your work: the peer table
 
@@ -107,7 +115,7 @@ when a token is issued.
 
 ## Note to the judge
 
-Check first: the blind-test table above, any detail view's peer table, and the interval
-column on the board. If the model is wrong, those three are where it shows. Then check
+Check first: the blind-test table above, any detail view's peer table, and the P25-P75
+range column on the board. If the model is wrong, those three are where it shows. Then check
 the Launch filter: the board's first screen is the 198 candidates, and the other 560 rows
 are one click away, each flagged with what it is.

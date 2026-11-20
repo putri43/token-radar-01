@@ -15,7 +15,12 @@ plans — and opens on the launch candidates, the radar's subject.
 
 v1 scored 947.181 on the dev ladder (rank 154 of 13,027) — 12.469 points short of the top
 10. v2 keeps the model that earned it and closes the gaps the leaders show: full 758-row
-coverage, a KPI strip, and deposit-sized farm plans.
+coverage, a KPI strip, and deposit-sized farm plans. v3 keeps the same model — a research
+round (~86 more candidates, 104 total) found nothing honestly better — and fixes the
+interval instead: every rank now carries an honest P25–P75 predictive range (48.4% of
+held-out actuals land inside it), the validation story leads with walk-forward factor
+misses (×2.97 / ×3.37 / ×5.40), and the method panel shows the comps scatter with the
+fitted curve.
 
 ## The model (peer-proven-2)
 

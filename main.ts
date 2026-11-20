@@ -92,7 +92,7 @@ const launchTop = board.find((r) => r.status === 'LAUNCH');
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows ranked (${a.ranked} launch, ${a.tokenizedWithMcap} trading, ${a.tokenRecordedNoMcap} token-recorded, ${a.excludedNoToken} products)\n` +
     `token radar: model ${radar.model_version}: log10(mcap) = ${v.intercept} + ${v.slope}*log10(TVL) + category offset, R2 ${v.r2}, resid x${v.residFactor}\n` +
-    `token radar: blind test LOOCV median error ${v.chosenLoocvPct}% (${v.chosenName}, ${v.candidates.length} candidates); walk-forward ${v.walkForwards.map((w) => `${w.cutoff} ${w.medianErrPct}% on ${w.test}`).join(', ')}\n` +
+    `token radar: blind test LOOCV median error ${v.chosenLoocvPct}% (${v.chosenName}, ${v.candidates.length} candidates), factor x${v.loocvFactorMiss}; walk-forward ${v.walkForwards.map((w) => `${w.cutoff} ${w.medianErrPct}% / x${w.factorMiss} on ${w.test}`).join(', ')}; P25-P75 predictive range holds ${v.predictiveHold2575Pct}% of held-out actuals (90% interval ${v.predictiveHold90Pct}%, widths x${v.predictiveWidth2575Factor} / x${v.predictiveWidth90Factor})\n` +
     `token radar: top launch ${launchTop?.slug} $${launchTop?.implied_value_usd.toLocaleString('en-US')}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'dashboard')} (${dashFiles.length + 1} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

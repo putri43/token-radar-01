@@ -49,6 +49,14 @@ table.mini tr.rejected td { color: var(--muted); }
 .note { border-left: 3px solid var(--amber); padding: 8px 12px; background: var(--panel2); border-radius: 0 6px 6px 0; margin: 10px 0; }
 .note b { color: var(--amber); }
 
+/* scatter chart */
+.scatter-wrap { margin: 8px 0; }
+.scatter { width: 100%; height: auto; display: block; }
+.scatter .grid { stroke: var(--line); stroke-width: 1; }
+.scatter .dot { fill: var(--cyan); opacity: .8; }
+.scatter .fit { stroke: var(--green); stroke-width: 2; }
+.scatter .axis { fill: var(--muted); font: 10px var(--mono); }
+
 /* controls */
 .controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 14px 0 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; }

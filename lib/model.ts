@@ -21,8 +21,9 @@
 //     model is the best of them; the rejected ones are shown with their errors, so the test is real.
 //   - Walk-forward: fit on protocols listed before each of three cutoffs, test on the ones
 //     listed after.
-//   - Bootstrap: 200 refits on resampled comps give every row a 90% value interval and a rank
-//     range. The bootstrap uses a fixed-seed generator, so two runs write the same bytes.
+//   - Bootstrap: 200 refits on resampled comps give every row a P25–P75 predictive range
+//     (each refit prediction plus one resampled in-sample residual) and a rank range. The
+//     bootstrap uses a fixed-seed generator, so two runs write the same bytes.
 //
 // Farm plans are costed, not slogans: gas per transaction comes from the protocol's main chain,
 // the deposit is sized in three tiers ($100 / $500 / $1,000) with every tier netted to the dollar,
@@ -300,35 +301,98 @@ function candidates(asOf: string): Candidate[] {
   ];
 }
 
-/** Leave-one-out median absolute error of one candidate, as a fraction (0.85 = 85%). */
-function loocv(candidate: Candidate, comps: SnapshotProtocol[]): number {
+/** Leave-one-out median absolute error and median factor miss of one candidate: the
+ *  factor is max(pred, actual) / min(pred, actual) per held-out comp, so a factor of
+ *  3.63 means the typical prediction is 3.63x off, high or low. */
+function loocvStats(candidate: Candidate, comps: SnapshotProtocol[]): { medianErr: number; factorMiss: number } {
   const errs: number[] = [];
+  const facs: number[] = [];
   for (let i = 0; i < comps.length; i++) {
     const train = comps.filter((_, j) => j !== i);
     const pred = candidate.predict(train, comps[i]!);
-    errs.push(Math.abs(pred - comps[i]!.mcap_usd!) / comps[i]!.mcap_usd!);
+    const actual = comps[i]!.mcap_usd!;
+    errs.push(Math.abs(pred - actual) / actual);
+    facs.push(Math.max(pred, actual) / Math.min(pred, actual));
   }
-  return median(errs);
+  return { medianErr: median(errs), factorMiss: median(facs) };
 }
 
-/** Walk-forward median absolute error: fit on protocols listed before the cutoff, test after. */
-function walkForward(comps: SnapshotProtocol[], cutoff: string, asOf: string): { medianErr: number; train: number; test: number } {
+/** Walk-forward median absolute error and median factor miss: fit on protocols listed
+ *  before the cutoff, test after. */
+function walkForward(comps: SnapshotProtocol[], cutoff: string, asOf: string): { medianErr: number; factorMiss: number; train: number; test: number } {
   const train = comps.filter((p) => p.listed_at !== null && p.listed_at < cutoff);
   const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= cutoff);
-  if (train.length < 10 || test.length === 0) return { medianErr: NaN, train: train.length, test: test.length };
+  if (train.length < 10 || test.length === 0) return { medianErr: NaN, factorMiss: NaN, train: train.length, test: test.length };
   const fit = fitComps(train, asOf);
-  const errs = test.map((p) => Math.abs(fittedValue(fit, p) - p.mcap_usd!) / p.mcap_usd!);
-  return { medianErr: median(errs), train: train.length, test: test.length };
+  const preds = test.map((p) => fittedValue(fit, p));
+  const errs = preds.map((pred, i) => Math.abs(pred - test[i]!.mcap_usd!) / test[i]!.mcap_usd!);
+  const facs = preds.map((pred, i) => Math.max(pred, test[i]!.mcap_usd!) / Math.min(pred, test[i]!.mcap_usd!));
+  return { medianErr: median(errs), factorMiss: median(facs), train: train.length, test: test.length };
+}
+
+/** LOOCV-protocol coverage of the residual-augmented predictive interval: for each
+ *  held-out comp, fit on the other 127, then 200 bootstrap refits of that fit, each
+ *  prediction plus one resampled in-sample residual as predictive noise. The old
+ *  parameter-only interval (bootstrap predictions alone) covered only 32% of held-out
+ *  actuals at its nominal 90% level because it ignored the noise the model itself
+ *  reports (residual SD 0.864 dex); the predictive interval is the honest one. Its 90%
+ *  band is far too wide to print per row, so the board prints the P25–P75 range instead. */
+function predictiveHold(comps: SnapshotProtocol[], asOf: string): { hold90Pct: number; hold2575Pct: number; width90Factor: number; width2575Factor: number } {
+  const rand = rng(20261114);
+  const boots = 200;
+  let in90 = 0;
+  let in2575 = 0;
+  const w90: number[] = [];
+  const w2575: number[] = [];
+  for (let i = 0; i < comps.length; i++) {
+    const train = comps.filter((_, j) => j !== i);
+    const held = comps[i]!;
+    const f = fitComps(train, asOf);
+    const resid = train.map((q) => LOG(q.mcap_usd!) - logValue(f, q));
+    const draws: number[] = [];
+    for (let b = 0; b < boots; b++) {
+      const sample = Array.from({ length: train.length }, () => train[Math.floor(rand() * train.length)]!);
+      const bootFit = fitComps(sample, asOf);
+      const noise = resid[Math.floor(rand() * resid.length)]!;
+      draws.push(LOG(fittedValue(bootFit, held)) + noise);
+    }
+    const lo5 = 10 ** percentile(draws, 0.05);
+    const hi95 = 10 ** percentile(draws, 0.95);
+    const lo25 = 10 ** percentile(draws, 0.25);
+    const hi75 = 10 ** percentile(draws, 0.75);
+    const actual = held.mcap_usd!;
+    if (actual >= lo5 && actual <= hi95) in90++;
+    if (actual >= lo25 && actual <= hi75) in2575++;
+    w90.push(hi95 / lo5);
+    w2575.push(hi75 / lo25);
+  }
+  const pct = (n: number) => Math.round((n / comps.length) * 1000) / 10;
+  return {
+    hold90Pct: pct(in90),
+    hold2575Pct: pct(in2575),
+    width90Factor: Math.round(median(w90) * 10) / 10,
+    width2575Factor: Math.round(median(w2575) * 10) / 10,
+  };
 }
 
 /** The validation block the dashboard prints: every candidate's blind error, the chosen model, and
  *  the walk-forward checks at three cutoffs. Nothing here is hardcoded: it is all computed from
- *  the snapshot. */
+ *  the snapshot. The factor misses are the median max(pred, actual) / min(pred, actual), the
+ *  number the top entries print beside their own; the predictive hold is the LOOCV coverage of
+ *  the residual-augmented predictive interval, the interval the board's rows actually carry. */
 export interface Validation {
   candidates: { name: string; loocvMedianErrPct: number; chosen: boolean }[];
   chosenName: string;
   chosenLoocvPct: number;
-  walkForwards: { medianErrPct: number; train: number; test: number; cutoff: string }[];
+  loocvFactorMiss: number;
+  flatMultipleLoocvPct: number;
+  walkForwards: { medianErrPct: number; factorMiss: number; train: number; test: number; cutoff: string }[];
+  predictiveHold90Pct: number;
+  predictiveHold2575Pct: number;
+  predictiveWidth90Factor: number;
+  predictiveWidth2575Factor: number;
+  rangeLoPct: number;
+  rangeHiPct: number;
   comps: number;
   r2: number;
   residSdDex: number;
@@ -340,19 +404,32 @@ export interface Validation {
 
 export function validate(comps: SnapshotProtocol[], fit: CompsFit, asOf: string): Validation {
   const cands = candidates(asOf);
-  const scored = cands.map((c) => ({ name: c.name, loocvMedianErrPct: Math.round(loocv(c, comps) * 1000) / 10, chosen: false }));
+  const scored = cands.map((c) => {
+    const s = loocvStats(c, comps);
+    return { name: c.name, loocvMedianErrPct: Math.round(s.medianErr * 1000) / 10, factorMiss: Math.round(s.factorMiss * 100) / 100, chosen: false };
+  });
   let best = 0;
   for (let i = 1; i < scored.length; i++) if (scored[i]!.loocvMedianErrPct < scored[best]!.loocvMedianErrPct) best = i;
   scored[best]!.chosen = true;
+  const flat = scored.find((s) => s.name === 'Flat multiple (median mcap/TVL)');
   const wfs = ['2024-06-01', '2025-01-01', '2025-06-01'].map((cutoff) => {
     const wf = walkForward(comps, cutoff, asOf);
-    return { medianErrPct: Math.round(wf.medianErr * 1000) / 10, train: wf.train, test: wf.test, cutoff };
+    return { medianErrPct: Math.round(wf.medianErr * 1000) / 10, factorMiss: Math.round(wf.factorMiss * 100) / 100, train: wf.train, test: wf.test, cutoff };
   });
+  const hold = predictiveHold(comps, asOf);
   return {
-    candidates: scored,
+    candidates: scored.map((s) => ({ name: s.name, loocvMedianErrPct: s.loocvMedianErrPct, chosen: s.chosen })),
     chosenName: scored[best]!.name,
     chosenLoocvPct: scored[best]!.loocvMedianErrPct,
+    loocvFactorMiss: scored[best]!.factorMiss,
+    flatMultipleLoocvPct: flat === undefined ? NaN : flat.loocvMedianErrPct,
     walkForwards: wfs,
+    predictiveHold90Pct: hold.hold90Pct,
+    predictiveHold2575Pct: hold.hold2575Pct,
+    predictiveWidth90Factor: hold.width90Factor,
+    predictiveWidth2575Factor: hold.width2575Factor,
+    rangeLoPct: 25,
+    rangeHiPct: 75,
     comps: comps.length,
     r2: Math.round(fit.r2 * 1000) / 1000,
     residSdDex: Math.round(fit.residSdDex * 1000) / 1000,
@@ -718,12 +795,17 @@ export function nearestPeers(p: SnapshotProtocol, comps: SnapshotProtocol[], n =
   return [...sameCat, ...rest].slice(0, n);
 }
 
-/** The protocols the board ranks, strongest first, with ranks 1..n and bootstrap intervals.
- *  All 758 protocols are ranked: launch candidates at their fitted implied value, tokens that
- *  already trade at their recorded market cap, and the other two slices at a fitted value
- *  flagged as not a launch price. The bootstrap resamples the comps fit 200 times; trading
- *  rows keep their market cap in every refit, so their value interval is exact and only their
- *  rank range moves. */
+/** The protocols the board ranks, strongest first, with ranks 1..n, a P25–P75 predictive
+ *  range and a rank range. All 758 protocols are ranked: launch candidates at their fitted
+ *  implied value, tokens that already trade at their recorded market cap, and the other two
+ *  slices at a fitted value flagged as not a launch price. The bootstrap resamples the
+ *  comps fit 200 times. Each refit prediction carries one resampled in-sample residual
+ *  (the full fit's log-residuals), so the range is a predictive range — it holds the noise
+ *  the model itself reports — and the board prints its middle half, P25–P75, because the
+ *  honest 90% predictive interval is far too wide to print per row. Trading rows keep
+ *  their market cap in every refit, so their range is exact and only their rank range
+ *  moves; the rank range is the P5–P95 of the refits' fitted ranks, not of the predictive
+ *  draws. */
 export function buildBoard(snapshot: Snapshot, fit: CompsFit, comps: SnapshotProtocol[]): BoardRow[] {
   const scored = snapshot.protocols.map((p) => {
     const status = statusOf(p);
@@ -732,7 +814,11 @@ export function buildBoard(snapshot: Snapshot, fit: CompsFit, comps: SnapshotPro
   });
   scored.sort((a, b) => b.value - a.value || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
 
-  // Bootstrap: 200 refits on resampled comps give every row a 90% value interval and a rank range.
+  // The full fit's in-sample log-residuals, one per comp: the predictive range adds one
+  // resampled residual to each bootstrap prediction.
+  const resid = comps.map((p) => LOG(p.mcap_usd!) - logValue(fit, p));
+
+  // Bootstrap: 200 refits on resampled comps give every row a predictive range and a rank range.
   const rand = rng(20261114);
   const bootValues = new Map<string, number[]>();
   const bootRanks = new Map<string, number[]>();
@@ -743,13 +829,16 @@ export function buildBoard(snapshot: Snapshot, fit: CompsFit, comps: SnapshotPro
   for (let b = 0; b < 200; b++) {
     const sample = Array.from({ length: comps.length }, () => comps[Math.floor(rand() * comps.length)]!);
     const bootFit = fitComps(sample, snapshot.as_of);
-    const bootScored = scored
-      .map((s) => ({ slug: s.p.slug, value: s.status === 'TRADING' ? s.p.mcap_usd! : fittedValue(bootFit, s.p) }))
-      .sort((a, c) => c.value - a.value || (a.slug < c.slug ? -1 : 1));
-    bootScored.forEach((row, i) => {
-      bootValues.get(row.slug)!.push(row.value);
-      bootRanks.get(row.slug)!.push(i + 1);
+    // Parameter values: the refit's fitted values, which rank the rows.
+    const param = scored.map((s) => ({ slug: s.p.slug, value: s.status === 'TRADING' ? s.p.mcap_usd! : fittedValue(bootFit, s.p) }));
+    // Predictive values: each refit prediction plus one resampled in-sample residual.
+    // A trading row's value is observed, not predicted, so it keeps its market cap.
+    scored.forEach((s, i) => {
+      const v = s.status === 'TRADING' ? s.p.mcap_usd! : 10 ** (LOG(param[i]!.value) + resid[Math.floor(rand() * resid.length)]!);
+      bootValues.get(s.p.slug)!.push(v);
     });
+    param.sort((a, c) => c.value - a.value || (a.slug < c.slug ? -1 : 1));
+    param.forEach((row, i) => bootRanks.get(row.slug)!.push(i + 1));
   }
 
   return scored.map((s, i) => {
@@ -768,8 +857,8 @@ export function buildBoard(snapshot: Snapshot, fit: CompsFit, comps: SnapshotPro
       change_7d: s.p.change_7d,
       age_days: s.age,
       implied_value_usd: s.value,
-      implied_lo_usd: Math.max(1, Math.round(percentile(values, 0.05))),
-      implied_hi_usd: Math.max(1, Math.round(percentile(values, 0.95))),
+      implied_lo_usd: Math.max(1, Math.round(percentile(values, 0.25))),
+      implied_hi_usd: Math.max(1, Math.round(percentile(values, 0.75))),
       rank_lo: Math.round(percentile(ranks, 0.05)),
       rank_hi: Math.round(percentile(ranks, 0.95)),
       verdict: plan.verdict,
